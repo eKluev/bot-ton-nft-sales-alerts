@@ -1,4 +1,4 @@
-name: [PROD] BOT NFT SALES ALERTS
+name: BOT NFT SALES ALERTS
 
 on:
   push:
