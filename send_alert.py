@@ -2,6 +2,7 @@ import os
 import requests
 import time
 import datetime
+import bugsnag
 from threading import Thread
 from core import connector as conn
 
@@ -19,6 +20,7 @@ class Daemon(Thread):
             data = conn.make_query("select * from alerts as a left join sales as s on s.id = a.sales_id where a.notification_sent = 0")
             ton_usd = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd")
             if ton_usd.status_code != 200 or 'the-open-network' not in ton_usd.json():
+                bugsnag.notify(Exception(f"CoinGeko API failed with code {ton_usd.status_code}: {ton_usd.content}"))
                 return
 
             ton_usd = ton_usd.json()['the-open-network']['usd']
