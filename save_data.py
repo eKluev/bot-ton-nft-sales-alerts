@@ -3,6 +3,7 @@ import time
 from threading import Thread
 from core import connector as conn
 
+
 class Daemon(Thread):
     def __init__(self, name, delay):
         Thread.__init__(self)
@@ -22,16 +23,17 @@ class Daemon(Thread):
         data = requests.get(f"https://tonapi.io/v1/blockchain/getTransactions?account={self.royalty_wallet}&minLt={self.get_max_lt()}")
 
         if data.status_code != 200:
+            print('No 200 from tonapi.io')
             return None
         else:
             data: dict = data.json()
             
             if not data['transactions']:
                 return None
-        
+
         for transaction in reversed(data['transactions']):
             if 'in_msg' in transaction and 'source' in transaction['in_msg'] and 'address' in transaction['in_msg']['source']:
-                if self.check_transaction_type(transaction['in_msg']['source']['address']) or transaction['in_msg']['msg_data'] == 'AAAAAE9mZmVyIHJveWFsaWVz':
+                if self.check_transaction_type(transaction['in_msg']['source']['address']) == 'nft_sale' or transaction['in_msg']['msg_data'] == 'AAAAAE9mZmVyIHJveWFsaWVz':
                     result = self.get_nft_sale_data(transaction['in_msg']['source']['address'])
                     
                     if transaction['in_msg']['msg_data'] == 'AAAAAE9mZmVyIHJveWFsaWVz':
@@ -42,14 +44,14 @@ class Daemon(Thread):
                     result['utime'] = transaction['utime']
                     result['lt'] = transaction['lt']
                     
-                    q = f"INSERT IGNORE INTO sales(nft_address, name, marketplace, price, sale_type,  owner_address, attr_theme, attr_type, collection_address, collection_name, image, utime, ltime) VALUES ('{result['nft_address']}','{result['name']}','{result['marketplace']}',{result['price']},'{result['nft_sale_type']}','{result['owner_address']}','{result['theme']}','{result['type']}','{result['collection']['address']}','{result['collection']['name']}','{result['image']}',{result['utime']},{result['lt']})"
+                    q = f"INSERT IGNORE INTO sales(nft_address, name, marketplace, price, sale_type,  owner_address, attr_theme, attr_type, collection_address, collection_name, image, utime, ltime) " \
+                        f"VALUES ('{result['nft_address']}','{result['name']}','{result['marketplace']}',{result['price']},'{result['nft_sale_type']}','{result['owner_address']}','{result['theme']}','{result['type']}','{result['collection']['address']}','{result['collection']['name']}','{result['image']}',{result['utime']},{result['lt']})"
                     conn.make_query(q, commit=True)
                     time.sleep(15)
                 else:
                     continue
 
-
-    def check_transaction_type(self, address) -> bool:
+    def check_transaction_type(self, address) -> str | bool:
         data = requests.get(f"https://tonapi.io/v1/account/getInfo?account={address}")
 
         if data.status_code != 200:
@@ -61,10 +63,11 @@ class Daemon(Thread):
         if 'interfaces' not in data or data['interfaces'] is None:
             return False
         elif 'nft_sale_get_gems' in data['interfaces'] or 'nft_sale' in data['interfaces']:
-            return True
+            return 'nft_sale'
+        elif 'nft_item' in data['interfaces']:
+            return 'nft_item'
         else:
             return False
-                
 
     def get_nft_sale_data(self, nft_sale_address) -> dict:
         data = requests.get(f"https://tonapi.io/v1/blockchain/getTransactions?account={nft_sale_address}")
@@ -75,50 +78,39 @@ class Daemon(Thread):
         else:
             data: dict = data.json()
         
-        result = dict()    
-        transaction_from = list()
-        transaction_to = list()
-        
+        result = dict()
+        nft_address = None
+
         for transaction in data['transactions']:
-            if transaction['in_msg'] and 'source' in transaction['in_msg']:
-                transaction_from.append(transaction['in_msg']['source']['address'])
             if transaction['out_msgs']:
                 for t_out in transaction['out_msgs']:
-                    transaction_to.append(t_out['destination']['address'])
-                    
-        transaction_from = list(set(transaction_from) - set(self.marketplaces.values()))
-        transaction_to = list(set(transaction_to) - set(self.marketplaces.values()))
-                
-        nft_address = list(set(transaction_to) & set(transaction_from))
-        owner_address = list(set(transaction_from) - set(nft_address))
-        
-        result['nft_address'] = self.get_bounceable_address(nft_address[0])
-        result['owner_address'] = self.get_bounceable_address(owner_address[0])
+                    if self.check_transaction_type(t_out['destination']['address']) == 'nft_item':
+                        nft_address = t_out['destination']['address']
+
+        result['nft_address'] = self.get_bounceable_address(nft_address)
         result.update(self.get_nft_data(result['nft_address']))
 
         result['price'] = 0
         for transaction in data['transactions']:
-            if 'source' in transaction['in_msg'] and transaction['in_msg']['source']['address'] == owner_address[0]:
+            if 'source' in transaction['in_msg'] and transaction['in_msg']['source']['address'] == result['base_64_owner_address']:
                 price: float = round(float(int(transaction['in_msg']['value']) / 10 ** 9 - 1), 2)
                 if result['price'] < price:
                     result['price'] = price
             
             if len(transaction['out_msgs']) == 4:
                 marketplace = 'Unknown'
-                for transaction in transaction['out_msgs']:
-                    if transaction['source']['address'] in self.marketplaces.values():
-                        marketplace = list(self.marketplaces.keys())[list(self.marketplaces.values()).index(transaction['source']['address'])]
-                    elif transaction['destination']['address'] in self.marketplaces.values():
-                        marketplace = list(self.marketplaces.keys())[list(self.marketplaces.values()).index(transaction['destination']['address'])]
+                for t in transaction['out_msgs']:
+                    if t['source']['address'] in self.marketplaces.values():
+                        marketplace = list(self.marketplaces.keys())[list(self.marketplaces.values()).index(t['source']['address'])]
+                    elif t['destination']['address'] in self.marketplaces.values():
+                        marketplace = list(self.marketplaces.keys())[list(self.marketplaces.values()).index(t['destination']['address'])]
 
                     result['marketplace'] = marketplace
-                
-            
+
         return result
 
-
     def get_nft_data(self, nft_address: str) -> dict:
-        data = requests.get(f"https://tonapi.io/v1/nft/getItems?addresses={nft_address}")
+        data = requests.get(f"https://tonapi.io/v2/nfts/{nft_address}")
 
         if data.status_code != 200:
             time.sleep(5)
@@ -126,25 +118,24 @@ class Daemon(Thread):
         else:
             data: dict = data.json()
             
-        if 'nft_items' not in data or len(data['nft_items']) == 0:
+        if len(data) == 0:
             return self.get_nft_data(nft_address)
-            
-        for nft in data['nft_items']:
-            nft['collection']['address'] = self.get_bounceable_address(nft['collection']['address'])
-            collection: dict = nft['collection']
-            name: str = nft['metadata']['name']
-            image: str = nft['metadata']['image']
-            
-            for attr in nft['metadata']['attributes']:
-                if attr['trait_type'] == 'type':
-                    attr_type: str = attr['value']
+
+        data['collection']['address'] = self.get_bounceable_address(data['collection']['address'])
+        collection: dict = data['collection']
+        name: str = data['metadata']['name']
+        image: str = data['metadata']['image']
+        owner_address: str = data['owner']['address']
+
+        for attr in data['metadata']['attributes']:
+            if attr['trait_type'] == 'type':
+                attr_type: str = attr['value']
+
+            if attr['trait_type'] == 'theme':
+                attr_theme: str = attr['value']
                     
-                if attr['trait_type'] == 'theme':
-                    attr_theme: str = attr['value']
-                    
-        return {"collection": collection, "name": name, "image": image, "type": attr_type, "theme": attr_theme}
-            
-            
+        return {"collection": collection, "name": name, "image": image, "type": attr_type, "theme": attr_theme, "base_64_owner_address": owner_address, "owner_address": self.get_bounceable_address(owner_address)}
+
     def get_bounceable_address(self, base64_address:str) -> str:
         data = requests.get(f"https://tonapi.io/v1/account/getInfo?account={base64_address}")
 

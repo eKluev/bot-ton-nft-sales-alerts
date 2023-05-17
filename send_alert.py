@@ -37,8 +37,7 @@ class Daemon(Thread):
                 message += f"🛍 Marketplace: #{d['marketplace']}\n\n"
                 message += f"🔖 Type of deal: {d['sale_type']}\n\n"
                 message += f"🕓 Date & time: {datetime.datetime.fromtimestamp(d['utime'])}\n"
-                
-                
+
                 for chat in chats:
                     while True:
                         data_msg = {"chat_id": chat, "photo": d['image'] + f'?a={time.time()}', "caption": message, "parse_mode": "HTML"}
@@ -47,7 +46,8 @@ class Daemon(Thread):
                             conn.make_query(f"update alerts set notification_sent=1 where sales_id={d['id']}", commit=True)
                             break
                         else:
-                            time.sleep(3)
-
+                            print(response.json())
+                            time.sleep(10)
+                        time.sleep(2)
 
             time.sleep(self.delay)
